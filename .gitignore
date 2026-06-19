@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime data (reset before each experiment)
+memory_store/failures.json
+results/run_log.json
+results/experiment_results.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
