@@ -341,7 +341,7 @@ python experiments/analyze_results.py
 | 지표 | Baseline | Failure-Aware |
 |------|----------|---------------|
 | 1차 실패 건수 | 8/216 (3.7%) | 13/216 (6.0%) |
-| Rescue | — | **8/8 (100%)** |
+| Rescue | — | 8/8 (100%) |
 | Hurt | — | 13건 |
 | 최종 성공률 | 100% | 100% |
 
@@ -349,13 +349,26 @@ python experiments/analyze_results.py
 
 - **라운드 수준 집계**: Δ ≈ 0~−5.6%로, 변동 폭이 표준편차(σ ≈ 8~9%) 범위 안에 있다. 정식 통계 검정(t-test 등) 없이는 두 조건 간 유의미한 차이를 단정하기 어렵고, Baseline 실패율 자체가 3.7%로 낮아 집계 지표의 분별력이 제한적이다.
 
-- **Rescue Rate (핵심 지표)**: Baseline이 1차 시도에서 실패한 8건 중 FA는 **전부(8/8, 100%)를 1차 성공**시켰다. n=8로 표본이 작아 정밀한 신뢰구간 추정에는 한계가 있으나, 메모리 메커니즘이 Baseline 실패 케이스에서 일관되게 구제 방향으로 작용했음을 보여준다.
+- **Rescue와 Hurt**: FA는 Baseline이 1차 시도에서 실패한 8건을 전부(8/8, 100%) 1차 성공시켰다. 그러나 동시에 Baseline이 1차 성공했던 13건에서 새롭게 실패했다. Net effect는 Rescue(8건) < Hurt(13건)로, FA가 Baseline보다 전반적으로 더 많은 1차 실패를 냈다. 이 실험에서 FA가 성능을 향상시킨다는 통계적 근거는 확보되지 않았으며, n=8이라는 표본 크기도 정밀한 신뢰구간 추정에 충분하지 않다.
 
-- **Hurt의 원인 — climbing_stairs**: FA의 13건 hurt 중 상당수는 `climbing_stairs`에서 발생했다 (FA 실패율 25% vs Baseline 4.2%). 이 태스크가 Round 1에서 실패하면 해당 힌트가 저장되고, 이후 Round 2·3에서도 힌트를 역으로 간섭해 연쇄 실패(in-run negative feedback loop)가 나타났다.
+- **Hurt 세부 — climbing_stairs**: 13건의 hurt 중 6건은 `climbing_stairs`에서 발생했다 (FA 실패율 25% vs Baseline 4.2%). 6건을 `hints_used` 유무로 분류하면:
+
+  | 케이스 | hints\_used | 분류 |
+  |--------|------------|------|
+  | run=1 round=1 | `[]` | 힌트 없음 — temperature=1.2 자연 변동 |
+  | run=1 round=3 | `[syntax]` | same-task 힌트 (climbing\_stairs 자체 이전 실패) |
+  | run=2 round=3 | `[]` | 힌트 없음 — temperature=1.2 자연 변동 |
+  | run=3 round=3 | `[off-by-one, boundary condition]` | same-task 힌트 (climbing\_stairs 자체 이전 실패) |
+  | run=7 round=2 | `[]` | 힌트 없음 — temperature=1.2 자연 변동 |
+  | run=7 round=3 | `[off-by-one ×2, boundary condition]` | same-task 힌트 (climbing\_stairs 자체 이전 실패) |
+
+  **3건은 힌트가 전혀 없는 상태에서 발생**했으며, cross-task 힌트가 사용된 케이스는 0건이다. 나머지 3건은 climbing\_stairs 자신의 이전 실패에서 생성된 same-task 힌트가 주입되었으나 여전히 실패했다. "in-run negative feedback loop"는 일부 케이스에서 관찰되나, hurt의 절반은 힌트와 무관한 temperature 기반 자연 변동으로 보인다.
 
 - **1라운드 동률**: Round 1에서 B=FA=94.4%로 동률이었다. 메모리가 비어있는 초기 상태에서 FA가 Baseline에 비해 불리하지 않음을 의미하며, hurt는 Round 2·3에서 메모리가 쌓인 이후 발생했다.
 
 - **최종 성공률**: 양 조건 모두 최대 3회 재시도 내 **100%**로 수렴했다. FA의 실질적 장점은 재시도 횟수 감소(1차 성공률)에 있다.
+
+**종합**: 본 실험에서 Failure-Aware 패턴이 일관되게 성능을 향상시킨다는 통계적 증거는 확보하지 못했다. Rescue(8건)와 Hurt(13건)가 동시에 관찰되었으며, Hurt의 절반 가량은 힌트와 무관한 자연 변동이었다. 본 프로젝트의 실질적 기여는 세 가지다: (1) Reflexion 대비 구조적으로 차별화된 proactive lookup과 cross-task transfer 메커니즘을 구현하고, 5.4에서 그 동작을 통제된 환경에서 검증했다. (2) 힌트 프롬프트의 톤이 소형 모델 행동에 미치는 영향을 실증적으로 발견했다 — WARNING 톤은 hurt 13건을 유발했으나, 완화된 톤으로 전환 후 hurt가 거의 사라졌고, 이후 temperature 재상승 과정에서 일부 hurt가 다시 나타났다. (3) 7B급 모델과 소규모 태스크 세트 환경에서는 패턴의 정량적 효과를 통계적으로 검출하기 어렵다는 negative result를 정직하게 보고했다.
 
 ### 5.4 메커니즘 검증 (통제된 시나리오)
 
@@ -395,13 +408,15 @@ Task: valid_parentheses
 
 4. **인위적 Temperature 보정**: 자연적인 실패율 5~20%를 확보하기 위해 temperature를 조정했으나, 이는 모델의 자연적 실패 분포가 아닌 인위적으로 설정된 환경이다. Temperature=1.2에서도 Baseline 실패율이 3.7%에 머물러 통계적 효과를 측정하기에는 실패 건수 자체가 부족했다.
 
-5. **In-run 부정적 피드백 루프**: 어떤 태스크가 Round 1에서 실패해 힌트가 저장되면, 이후 Round 2·3에서도 그 힌트가 역으로 간섭해 같은 태스크를 연속 실패하게 만드는 경우가 관찰되었다 (`climbing_stairs`, Run 5 등). 힌트 유효성 검증이나 라운드별 메모리 갱신 전략이 필요하다.
+5. **In-run 부정적 피드백 루프 (일부 케이스)**: Round 1 실패 → 힌트 저장 → 이후 라운드 오염이라는 연쇄 실패 패턴은 `climbing_stairs` hurt 6건 중 **3건**에서만 관찰되었다. 나머지 3건은 `hints_used`가 빈 배열(`[]`)로, 힌트가 전혀 없는 상태에서의 실패였다 (run=1 round=1, run=2 round=3, run=7 round=2). 이는 hurt의 절반이 피드백 루프가 아닌 temperature=1.2에서의 단순 자연 변동임을 시사한다. 힌트 유효성 검증이나 라운드별 메모리 갱신 전략은 힌트 관련 케이스에는 도움이 되나, 노이즈 케이스에는 효과가 없다.
 
 6. **메모리 증가**: 가지치기 없이 실패가 누적되면 관련 없는 힌트가 프롬프트를 희석시킬 수 있다. 최근성 가중치 또는 신뢰도 기반 검색 전략으로 장기 성능을 개선할 수 있다.
 
 7. **단일 모델 다중 역할**: 동일 모델이 코드 생성, 실패 분석, 힌트 소비를 모두 담당한다. 역할 분리(분석에는 더 큰 모델, 생성에는 더 빠른 모델)로 전체 품질을 향상시킬 수 있다.
 
-8. **통계적 한계**: 본 실험은 정식 통계 검정(t-test 등)을 수행하지 않았다. 라운드 집계 지표는 표준편차 범위 내 변동이어서 두 조건 간 차이를 확정하기 어렵고, Rescue Rate(100%)의 분모인 n=8 역시 정밀한 신뢰구간 추정에 충분한 표본이 아니다. 더 많은 독립 실험 또는 실패율이 높은 환경에서 재검증이 필요하다.
+8. **통계적 한계**: 본 실험은 정식 통계 검정(t-test 등)을 수행하지 않았다. 라운드 집계 지표는 표준편차 범위 내 변동이어서 두 조건 간 차이를 확정하기 어렵고, n=8 역시 정밀한 신뢰구간 추정에 충분한 표본이 아니다. 더 많은 독립 실험 또는 실패율이 높은 환경에서 재검증이 필요하다.
+
+9. **Same-task 힌트의 불완전한 효과**: `climbing_stairs` hurt 3건은 태스크 자신의 이전 실패에서 생성된 same-task 힌트(`off-by-one`, `boundary condition`)를 정상적으로 주입받았음에도 다시 실패했다. 메모리 메커니즘은 의도대로 동작했으나(힌트 생성·조회·주입 모두 정상), 7B 소형 모델에서는 그 힌트가 실제 코드 품질 향상으로 이어지지 않았다. 이는 설계 문제가 아니라 소비 모델의 지시 추종 능력(instruction-following capacity)에 의한 한계이며, 힌트 주입의 효과 자체가 모델 크기에 따라 달라질 수 있음을 시사한다.
 
 ---
 
@@ -755,7 +770,7 @@ python experiments/analyze_results.py
 | Metric | Baseline | Failure-Aware |
 |--------|----------|---------------|
 | 1st-attempt failures | 8/216 (3.7%) | 13/216 (6.0%) |
-| Rescue | — | **8/8 (100%)** |
+| Rescue | — | 8/8 (100%) |
 | Hurt | — | 13 cases |
 | Final pass rate | 100% | 100% |
 
@@ -763,13 +778,26 @@ python experiments/analyze_results.py
 
 - **Round-level aggregate**: Δ ≈ 0–5.6%, which falls within the standard deviation range (σ ≈ 8–9%). Without a formal statistical test (e.g., t-test), no significant difference between conditions can be asserted. The Baseline failure rate of 3.7% further limits the discriminative power of the aggregate metric.
 
-- **Rescue Rate (key metric)**: Of the 8 cases where Baseline failed the 1st attempt, FA succeeded in **all 8 (100%)**. With n=8, precise confidence interval estimation is limited; however, 8/8 consistently demonstrates the memory mechanism acting in a rescue direction when failures occur.
+- **Rescue and Hurt**: FA rescued all 8 cases (100%) where Baseline failed on the 1st attempt. However, it simultaneously introduced 13 new failures in cases where Baseline had succeeded. The net effect is negative — Hurt (13) exceeds Rescue (8) — meaning FA produced more 1st-attempt failures than Baseline overall. This experiment yields no statistical evidence that FA improves performance. The n=8 sample size also precludes precise confidence interval estimation.
 
-- **Hurt source — climbing_stairs**: The majority of FA's 13 hurts originated from `climbing_stairs` (FA failure rate 25% vs Baseline 4.2%). When this task fails in Round 1 and a hint is stored, that hint can interfere with subsequent Round 2 and 3 attempts, causing a cascade failure (in-run negative feedback loop).
+- **Hurt breakdown — climbing_stairs**: 6 of FA's 13 hurts originated from `climbing_stairs` (FA failure rate 25% vs Baseline 4.2%). Classifying the 6 cases by `hints_used`:
+
+  | Case | hints\_used | Classification |
+  |------|------------|----------------|
+  | run=1 round=1 | `[]` | No hints — natural variation at temperature=1.2 |
+  | run=1 round=3 | `[syntax]` | Same-task hint (from climbing\_stairs's own prior failure) |
+  | run=2 round=3 | `[]` | No hints — natural variation at temperature=1.2 |
+  | run=3 round=3 | `[off-by-one, boundary condition]` | Same-task hints (from climbing\_stairs's own prior failure) |
+  | run=7 round=2 | `[]` | No hints — natural variation at temperature=1.2 |
+  | run=7 round=3 | `[off-by-one ×2, boundary condition]` | Same-task hints (from climbing\_stairs's own prior failure) |
+
+  **3 of 6 hurts occurred with no hints at all**, and no cross-task hints were involved in any case. The remaining 3 used same-task hints generated from climbing_stairs's own prior failures, yet still failed. The "in-run negative feedback loop" pattern is observed in some cases, but roughly half of the hurts appear to be temperature-driven noise unrelated to the hint mechanism.
 
 - **Round 1 parity**: In Round 1, B = FA = 94.4% — FA does not perform worse when memory is empty, confirming that hurts accumulate only after memory is populated in later rounds.
 
 - **Final pass rate**: Both conditions converge to **100%** final pass rate within 3 attempts. FA's practical benefit is first-attempt efficiency — reducing retry overhead rather than changing the final outcome.
+
+**Summary**: This experiment did not yield statistical evidence that the Failure-Aware pattern consistently improves performance. Rescue (8 cases) and Hurt (13 cases) were observed simultaneously, and roughly half of the hurts appear to be temperature-driven noise rather than hint-induced failures. The project's concrete contributions are three-fold: (1) implementing a structurally distinct proactive lookup and cross-task transfer mechanism relative to Reflexion, with its operation verified under the controlled scenario in Section 5.4; (2) empirically discovering that hint prompt tone significantly influences small-model behavior — a WARNING tone produced 13 hurts, switching to a softened tone nearly eliminated hurts, and a subsequent temperature increase reintroduced some hurt cases; and (3) honestly reporting the negative result that in a 7B-class model / small task-set setting, the pattern's quantitative effect is difficult to detect statistically.
 
 ### 5.4 Mechanism Demonstration (Controlled Scenario)
 
@@ -809,13 +837,15 @@ This confirms:
 
 4. **Artificial temperature calibration**: Temperature was manually adjusted to obtain a measurable natural failure rate (5–20%). This is not a natural failure distribution — it is an artificially configured environment. Even at temperature=1.2, the Baseline failure rate remained at 3.7%, providing too few failure events for statistically robust measurement.
 
-5. **In-run negative feedback loop**: When a task fails in Round 1 and its hint is stored, that hint can interfere with the same task in subsequent rounds, causing cascading failures. This was observed with `climbing_stairs` across multiple runs. A hint validity check or per-round memory update strategy would mitigate this.
+5. **In-run negative feedback loop (partial)**: The Round-1-fail → hint-stored → subsequent-round contamination cascade was observed in only **3 of 6** `climbing_stairs` hurt cases. The remaining 3 had empty `hints_used` arrays — failures with no hints at all (run=1 round=1, run=2 round=3, run=7 round=2) — suggesting natural stochastic noise at temperature=1.2 rather than a feedback loop. A hint validity check or per-round memory update strategy would address the hint-related cases, but would have no effect on the noise-driven failures.
 
 6. **Memory growth**: As failures accumulate without pruning, irrelevant hints may dilute the prompt. A recency-weighted or confidence-scored retrieval strategy would improve long-run performance.
 
 7. **Single model for all roles**: The same model handles code generation, failure analysis, and hint consumption. Separating these roles (e.g., a larger model for analysis, faster model for generation) could improve overall quality.
 
-8. **Statistical limitations**: No formal statistical tests (e.g., t-test) were performed. The round-level aggregate differences fall within the standard deviation range and cannot be asserted as significant without hypothesis testing. The Rescue Rate denominator (n=8) is also too small for precise confidence interval estimation. Replication in a higher-failure-rate environment or with more independent runs is needed to draw firmer conclusions.
+8. **Statistical limitations**: No formal statistical tests (e.g., t-test) were performed. The round-level aggregate differences fall within the standard deviation range and cannot be asserted as significant without hypothesis testing. The n=8 sample size is also too small for precise confidence interval estimation. Replication in a higher-failure-rate environment or with more independent runs is needed to draw firmer conclusions.
+
+9. **Same-task hints not reliably effective in small models**: Three of the `climbing_stairs` hurts occurred even when same-task hints (`off-by-one`, `boundary condition`) — generated from the task's own prior failures — were correctly injected. The memory mechanism functioned as designed: hints were generated, retrieved, and injected. Yet the 7B model still failed. This points to a limitation in the consuming model's instruction-following capacity rather than the retrieval mechanism itself, and suggests that the effectiveness of hint injection may not scale down to smaller models.
 
 ---
 
